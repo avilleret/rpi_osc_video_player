@@ -29,10 +29,10 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 static const GLbyte quadx[6*4*3] = {
    /* FRONT */
-   -4, -4,  0,
-   4, -4,  0,
-   -4,  4,  0,
-   4,  4,  0
+   -1, -1,  0,
+   1, -1,  0,
+   -1,  1,  0,
+   1,  1,  0
 };
 
 /** Texture coordinates for the quad. */
@@ -51,9 +51,9 @@ static GLfloat perspecMat[4 *4]={
 };
 
 static float srcPoint[4*3]={
-    -1., -1.,
-   1., -1., 
-   1.,  1.,
-    -1.,  1.
+    -1.,    -1.,
+    1.,     -1., 
+    1.,     1.,
+    -1.,    1.
 };
     

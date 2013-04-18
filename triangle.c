@@ -97,7 +97,10 @@ static void init_osc();
 void lo_error(int num, const char *m, const char *path);
 int osc_handler_dst_point(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data);
-
+int osc_handler_matrix(const char *path, const char *types, lo_arg **argv, int argc,
+		 void *data, void *user_data);
+int osc_handler_camtranslate(const char *path, const char *types, lo_arg **argv, int argc,
+		 void *data, void *user_data);
 static void* eglImage = 0;
 static pthread_t thread1;
 
@@ -213,8 +216,8 @@ static void init_ogl(CUBE_STATE_T *state)
  ***********************************************************/
 static void init_model_proj(CUBE_STATE_T *state)
 {
-   float nearp = 1.0f;
-   float farp = 10.0f;
+   float nearp = 0.5f;
+   float farp = 100.0f;
    float hht;
    float hwd;
 
@@ -226,14 +229,15 @@ static void init_model_proj(CUBE_STATE_T *state)
    glLoadIdentity();
 
    //~ hht = nearp * (float)tan(45.0 / 2.0 / 180.0 * M_PI);
-   hht = 1.;
-   hwd = (float)state->screen_width / (float)state->screen_height;
+   hht = nearp;
+   hwd = (float)state->screen_width / (float)state->screen_height * nearp;
 
    glFrustumf(-hwd, hwd, -hht, hht, nearp, farp);
    
    printf("window size : %dx%d\n", state->screen_width, state->screen_height);
    
    glEnableClientState( GL_VERTEX_ARRAY );
+   glScalef(1.,1.,0.);
    glVertexPointer( 3, GL_BYTE, 0, quadx );
 
    reset_model(state);
@@ -255,12 +259,6 @@ static void reset_model(CUBE_STATE_T *state)
     // reset model position
     glMatrixMode(GL_MODELVIEW);
     glLoadMatrixf(perspecMat);
-   
-    // reset model rotation
-    state->rot_angle_x = 45.f; state->rot_angle_y = 30.f; state->rot_angle_z = 0.f;
-    state->rot_angle_x_inc = 0.5f; state->rot_angle_y_inc = 0.5f; state->rot_angle_z_inc = 0.f;
-    //~ state->rot_angle_x_inc = 0.f; state->rot_angle_y_inc = 0.f; state->rot_angle_z_inc = 0.f;
-    state->distance = 4.f;
 }
 
 /***********************************************************
@@ -276,14 +274,10 @@ static void reset_model(CUBE_STATE_T *state)
  ***********************************************************/
 static void update_model(CUBE_STATE_T *state)
 {
-    glMatrixMode(GL_MODELVIEW);
+    glMatrixMode(GL_MODELVIEW); 
+    glLoadIdentity();
+    glMatrixMode(GL_PROJECTION); 
     glLoadMatrixf(perspecMat);
-    
-    // move camera back to see the cube
-    glScalef(16.f/9.f, 1.f, 1.f);
-    glTranslatef(0.f, 0.f, -state->distance);
-    
-   
 }
 
 /***********************************************************
@@ -380,6 +374,7 @@ static void init_osc(){
     
     /* add a function to wait for /quad message */
     lo_server_thread_add_method(osc_server, "/dst_point", "ffffffff", osc_handler_dst_point, NULL);
+    lo_server_thread_add_method(osc_server, "/map_matrix", "fffffffff", osc_handler_matrix, NULL);
     
     lo_server_thread_start(osc_server);
 
@@ -418,74 +413,151 @@ void lo_error(int num, const char *msg, const char *path)
 int osc_handler_dst_point(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data)
 {
-    printf("receive /dst_point with %d arg\n", argc);
     CvPoint2D32f src[8], dst[8];
-    CvMat *map_matrix;
+    CvMat *map_matrix, *src_mat, *dst_mat;
     int i;
-    float *pt;
+    float *pt,*pt2;
     
 	map_matrix=cvCreateMat(3, 3, CV_32FC1 );
+	dst_mat=cvCreateMat(4, 1, CV_32FC2 );
+	src_mat=cvCreateMat(4, 1, CV_32FC2 );
     
-    printf("set src point...");
     for (i=0;i<4;i++){
         src[i].x=srcPoint[i*2];
         src[i].y=srcPoint[i*2+1];
     }
-    printf("OK\n");
   
-    printf("set dst point...");
     for (i=0;i<4;i++){
         dst[i].x=argv[i*2]->f;
         dst[i].y=argv[i*2+1]->f;
     }
-    printf("OK\n");
     
-    printf("\t src point \t\t dst point \n");
-    for (i=0;i<4;i++){
-        printf("\t%.3f\t%.3f\t\t%.3f\t%.3f",src[i].x, src[i].y, dst[i].x, dst[i].y);
-        printf("\n");
+    //~ printf("\t src point \t\t dst point \n");
+    //~ for (i=0;i<4;i++){
+        //~ printf("\t%.3f\t%.3f\t\t%.3f\t%.3f",src[i].x, src[i].y, dst[i].x, dst[i].y);
+        //~ printf("\n");
+    //~ }
+
+    cvGetPerspectiveTransform(src, dst, map_matrix);
+    
+    pt=dst_mat->data.fl;
+    pt2=src_mat->data.fl;
+    for ( i=0;i<4;i++) {
+        *(pt++)=dst[i].x;
+        *(pt++)=dst[i].y;
+        *(pt2++)=src[i].x;
+        *(pt2++)=src[i].y;
     }
 
-    map_matrix=cvGetPerspectiveTransform(src, dst, map_matrix);
+        
+    cvPerspectiveTransform(dst_mat, src_mat, map_matrix);
+    //~ printf("src2 matrix :\n");
+    //~ pt=src_mat->data.fl;
+    //~ for (i=0;i<4;i++){
+        //~ printf("%.3f\t%.3f\n",*(pt++), *(pt++));
+    //~ }
+    //~ printf("-----------------\n");
     
-    pt=map_matrix->data.fl;
-    for (i=0;i<9;i++){
-        printf("%.3f\t",*(pt++));
-    }
-    printf("\n");
+    //~ pt=map_matrix->data.fl;
+    //~ for (i=0;i<9;i++){
+        //~ printf("%.3f\t",*(pt++));
+    //~ }
+    //~ printf("\n");
+//~ 
+    //~ pt=map_matrix->data.fl;
+    //~ perspecMat[0]=*(pt++);
+    //~ perspecMat[1]=*(pt++);
+    //~ perspecMat[2]=0.;    
+    //~ perspecMat[3]=*(pt++);
+    //~ 
+    //~ perspecMat[4]=*(pt++);
+    //~ perspecMat[5]=*(pt++);
+    //~ perspecMat[6]=0.;
+    //~ perspecMat[7]=*(pt++);
+    //~ 
+    //~ perspecMat[8]=0.;
+    //~ perspecMat[9]=0.;
+    //~ perspecMat[10]=1.;
+    //~ perspecMat[11]=0.;
+    //~ 
+    //~ perspecMat[12]=*(pt++);
+    //~ perspecMat[13]=*(pt++);
+    //~ perspecMat[14]=0.;
+    //~ perspecMat[15]=*(pt++);
 
     pt=map_matrix->data.fl;
     perspecMat[0]=*(pt++);
-    perspecMat[1]=*(pt++);
-    perspecMat[2]=0.;    
-    perspecMat[3]=*(pt++);
-    
     perspecMat[4]=*(pt++);
-    perspecMat[5]=*(pt++);
-    perspecMat[6]=0.;
-    perspecMat[7]=*(pt++);
-    
-    perspecMat[8]=0.;
-    perspecMat[9]=0.;
-    perspecMat[10]=1.;
-    perspecMat[11]=0.;
-    
+    perspecMat[8]=0.;    
     perspecMat[12]=*(pt++);
+    
+    perspecMat[1]=*(pt++);
+    perspecMat[5]=*(pt++);
+    perspecMat[9]=0.;
     perspecMat[13]=*(pt++);
+    
+    perspecMat[2]=0.;
+    perspecMat[6]=0.;
+    perspecMat[10]=1.;
     perspecMat[14]=0.;
+    
+    perspecMat[3]=*(pt++);
+    perspecMat[7]=*(pt++);
+    perspecMat[11]=0.;
     perspecMat[15]=*(pt++);
     
-    printf("perspecMat\n");
-    for (i=0;i<16;i++){
-        if ( i%4 ==0 ) printf("\n");
-        //~ printf("%.3f\t%.3f\t%.3f\t%.3f\n", perspecMat[i*4], perspecMat[i*4+1], perspecMat[i*4+2], perspecMat[i*4+3]);
-        printf("\t%.3f",perspecMat[i]);
-    }
-    printf("\n");
+    //~ printf("perspecMat\n");
+    //~ for (i=0;i<16;i++){
+        //~ if ( i%4 ==0 ) printf("\n");
+        //~ //printf("%.3f\t%.3f\t%.3f\t%.3f\n", perspecMat[i*4], perspecMat[i*4+1], perspecMat[i*4+2], perspecMat[i*4+3]);
+        //~ printf("\t%.3f",perspecMat[i]);
+    //~ }
+    //~ printf("\n");
     
     return 0;
 }
 
+int osc_handler_matrix(const char *path, const char *types, lo_arg **argv, int argc,
+		 void *data, void *user_data)
+{
+     int i = 0;
+    
+    perspecMat[0]=argv[i++]->f;
+    perspecMat[4]=argv[i++]->f;
+    perspecMat[8]=0.;    
+    perspecMat[12]=argv[i++]->f;
+    
+    perspecMat[1]=argv[i++]->f;
+    perspecMat[5]=argv[i++]->f;
+    perspecMat[9]=0.;
+    perspecMat[13]=argv[i++]->f;
+    
+    perspecMat[2]=0.;
+    perspecMat[6]=0.;
+    perspecMat[10]=1.;
+    perspecMat[14]=0.;
+    
+    perspecMat[3]=argv[i++]->f;
+    perspecMat[7]=argv[i++]->f;
+    perspecMat[11]=0.;
+    perspecMat[15]=argv[i++]->f;
+    
+    //~ printf("perspecMat\n");
+    //~ for (i=0;i<16;i++){
+        //~ if ( i%4 ==0 ) printf("\n");
+        //~ //printf("%.3f\t%.3f\t%.3f\t%.3f\n", perspecMat[i*4], perspecMat[i*4+1], perspecMat[i*4+2], perspecMat[i*4+3]);
+        //~ printf("\t%.3f",perspecMat[i]);
+    //~ }
+    //~ printf("\n");
+    
+    return 0;
+}
+
+int osc_handler_camtranslate(const char *path, const char *types, lo_arg **argv, int argc,
+		 void *data, void *user_data){
+    state->distance=argv[0]->f;
+    return 0;
+}
 //------------------------------------------------------------------------------
 
 static void exit_func(void)
