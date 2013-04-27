@@ -10,8 +10,10 @@ $ sudo apt-get install liblo-dev libopencv-dev
 for ilclient, you must build it yourself (anyhow, it's easy) :
 $ cd /opt/vc/src/hello_pi
 $ make -C libs/ilclient
+$ make -C libs/vgfont
+vgfont is not used yet, but could later...
 
-to build, just run (in the folder download from git) :
+to build rpi_osc_video_player.bin, just run (in the folder download from git) :
 $ make
 
 to use :
