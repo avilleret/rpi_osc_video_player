@@ -83,6 +83,8 @@ typedef struct
    GLfloat distance_inc;
 } CUBE_STATE_T;
 
+
+
 static void init_ogl(CUBE_STATE_T *state);
 static void init_model_proj(CUBE_STATE_T *state);
 static void reset_model(CUBE_STATE_T *state);
@@ -92,6 +94,12 @@ static void init_textures(CUBE_STATE_T *state);
 static void exit_func(void);
 static volatile int terminate;
 static CUBE_STATE_T _state, *state=&_state;
+char *filename;
+
+int stop_flag=0; // flag to stop the thread
+
+static void decoding_thread_stop(void);
+static void decoding_thread_start(void);
 
 static void init_osc();
 void lo_error(int num, const char *m, const char *path);
@@ -99,8 +107,13 @@ int osc_handler_dst_point(const char *path, const char *types, lo_arg **argv, in
 		 void *data, void *user_data);
 int osc_handler_matrix(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data);
-int osc_handler_camtranslate(const char *path, const char *types, lo_arg **argv, int argc,
+int osc_handler_open(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data);
+int osc_handler_stop(const char *path, const char *types, lo_arg **argv, int argc,
+		 void *data, void *user_data);
+int osc_handler_speed(const char *path, const char *types, lo_arg **argv, int argc,
+		 void *data, void *user_data);
+         
 static void* eglImage = 0;
 static pthread_t thread1;
 
@@ -118,89 +131,89 @@ static pthread_t thread1;
  ***********************************************************/
 static void init_ogl(CUBE_STATE_T *state)
 {
-   int32_t success = 0;
-   EGLBoolean result;
-   EGLint num_config;
+    int32_t success = 0;
+    EGLBoolean result;
+    EGLint num_config;
 
-   static EGL_DISPMANX_WINDOW_T nativewindow;
+    static EGL_DISPMANX_WINDOW_T nativewindow;
 
-   DISPMANX_ELEMENT_HANDLE_T dispman_element;
-   DISPMANX_DISPLAY_HANDLE_T dispman_display;
-   DISPMANX_UPDATE_HANDLE_T dispman_update;
-   VC_RECT_T dst_rect;
-   VC_RECT_T src_rect;
+    DISPMANX_ELEMENT_HANDLE_T dispman_element;
+    DISPMANX_DISPLAY_HANDLE_T dispman_display;
+    DISPMANX_UPDATE_HANDLE_T dispman_update;
+    VC_RECT_T dst_rect;
+    VC_RECT_T src_rect;
 
-   static const EGLint attribute_list[] =
-   {
-      EGL_RED_SIZE, 8,
-      EGL_GREEN_SIZE, 8,
-      EGL_BLUE_SIZE, 8,
-      EGL_ALPHA_SIZE, 8,
-      EGL_DEPTH_SIZE, 16,
-      //EGL_SAMPLES, 4,
-      EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-      EGL_NONE
-   };
-   
-   EGLConfig config;
+    static const EGLint attribute_list[] =
+    {
+        EGL_RED_SIZE, 8,
+        EGL_GREEN_SIZE, 8,
+        EGL_BLUE_SIZE, 8,
+        EGL_ALPHA_SIZE, 8,
+        EGL_DEPTH_SIZE, 16,
+        //EGL_SAMPLES, 4,
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
+        EGL_NONE
+    };
+    
+    EGLConfig config;
 
-   // get an EGL display connection
-   state->display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-   assert(state->display!=EGL_NO_DISPLAY);
+    // get an EGL display connection
+    state->display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+    assert(state->display!=EGL_NO_DISPLAY);
 
-   // initialize the EGL display connection
-   result = eglInitialize(state->display, NULL, NULL);
-   assert(EGL_FALSE != result);
+    // initialize the EGL display connection
+    result = eglInitialize(state->display, NULL, NULL);
+    assert(EGL_FALSE != result);
 
-   // get an appropriate EGL frame buffer configuration
-   // this uses a BRCM extension that gets the closest match, rather than standard which returns anything that matches
-   result = eglSaneChooseConfigBRCM(state->display, attribute_list, &config, 1, &num_config);
-   assert(EGL_FALSE != result);
+    // get an appropriate EGL frame buffer configuration
+    // this uses a BRCM extension that gets the closest match, rather than standard which returns anything that matches
+    result = eglSaneChooseConfigBRCM(state->display, attribute_list, &config, 1, &num_config);
+    assert(EGL_FALSE != result);
 
-   // create an EGL rendering context
-   state->context = eglCreateContext(state->display, config, EGL_NO_CONTEXT, NULL);
-   assert(state->context!=EGL_NO_CONTEXT);
+    // create an EGL rendering context
+    state->context = eglCreateContext(state->display, config, EGL_NO_CONTEXT, NULL);
+    assert(state->context!=EGL_NO_CONTEXT);
 
    // create an EGL window surface
    success = graphics_get_display_size(0 /* LCD */, &state->screen_width, &state->screen_height);
    assert( success >= 0 );
 
-   dst_rect.x = 0;
-   dst_rect.y = 0;
-   dst_rect.width = state->screen_width;
-   dst_rect.height = state->screen_height;
+    dst_rect.x = 0;
+    dst_rect.y = 0;
+    dst_rect.width = state->screen_width;
+    dst_rect.height = state->screen_height;
       
-   src_rect.x = 0;
-   src_rect.y = 0;
-   src_rect.width = state->screen_width << 16;
-   src_rect.height = state->screen_height << 16;        
+    src_rect.x = 0;
+    src_rect.y = 0;
+    src_rect.width = state->screen_width << 16;
+    src_rect.height = state->screen_height << 16;        
 
-   dispman_display = vc_dispmanx_display_open( 0 /* LCD */);
-   dispman_update = vc_dispmanx_update_start( 0 );
+    dispman_display = vc_dispmanx_display_open( 0 /* LCD */);
+    dispman_update = vc_dispmanx_update_start( 0 );
          
-   dispman_element = vc_dispmanx_element_add ( dispman_update, dispman_display,
-      0/*layer*/, &dst_rect, 0/*src*/,
-      &src_rect, DISPMANX_PROTECTION_NONE, 0 /*alpha*/, 0/*clamp*/, 0/*transform*/);
+    dispman_element = vc_dispmanx_element_add ( dispman_update, dispman_display,
+        0/*layer*/, &dst_rect, 0/*src*/,
+        &src_rect, DISPMANX_PROTECTION_NONE, 0 /*alpha*/, 0/*clamp*/, 0/*transform*/);
       
-   nativewindow.element = dispman_element;
-   nativewindow.width = state->screen_width;
-   nativewindow.height = state->screen_height;
-   vc_dispmanx_update_submit_sync( dispman_update );
+    nativewindow.element = dispman_element;
+    nativewindow.width = state->screen_width;
+    nativewindow.height = state->screen_height;
+    vc_dispmanx_update_submit_sync( dispman_update );
       
-   state->surface = eglCreateWindowSurface( state->display, config, &nativewindow, NULL );
-   assert(state->surface != EGL_NO_SURFACE);
+    state->surface = eglCreateWindowSurface( state->display, config, &nativewindow, NULL );
+    assert(state->surface != EGL_NO_SURFACE);
 
-   // connect the context to the surface
-   result = eglMakeCurrent(state->display, state->surface, state->surface, state->context);
-   assert(EGL_FALSE != result);
+    // connect the context to the surface
+    result = eglMakeCurrent(state->display, state->surface, state->surface, state->context);
+    assert(EGL_FALSE != result);
 
-   // Set background color and clear buffers
-   glClearColor(0.f, 0.f, 0.f, 1.0f);
+    // Set background color and clear buffers
+    glClearColor(0.f, 0.f, 0.f, 1.0f);
 
-   // Enable back face culling.
-   glEnable(GL_CULL_FACE);
+    // Enable back face culling.
+    glEnable(GL_CULL_FACE);
 
-   glMatrixMode(GL_MODELVIEW);
+    glMatrixMode(GL_MODELVIEW);
 }
 
 /***********************************************************
@@ -216,31 +229,31 @@ static void init_ogl(CUBE_STATE_T *state)
  ***********************************************************/
 static void init_model_proj(CUBE_STATE_T *state)
 {
-   float nearp = 0.5f;
-   float farp = 100.0f;
-   float hht;
-   float hwd;
+    float nearp = 0.5f;
+    float farp = 100.0f;
+    float hht;
+    float hwd;
 
-   glHint( GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST );
+    glHint( GL_PERSPECTIVE_CORRECTION_HINT, GL_NICEST );
 
-   glViewport(0, 0, (GLsizei)state->screen_width, (GLsizei)state->screen_height);
+    glViewport(0, 0, (GLsizei)state->screen_width, (GLsizei)state->screen_height);
       
-   glMatrixMode(GL_PROJECTION);
-   glLoadIdentity();
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
 
-   //~ hht = nearp * (float)tan(45.0 / 2.0 / 180.0 * M_PI);
-   hht = nearp;
-   hwd = (float)state->screen_width / (float)state->screen_height * nearp;
+    //~ hht = nearp * (float)tan(45.0 / 2.0 / 180.0 * M_PI);
+    hht = nearp;
+    hwd = (float)state->screen_width / (float)state->screen_height * nearp;
 
-   glFrustumf(-hwd, hwd, -hht, hht, nearp, farp);
+    glFrustumf(-hwd, hwd, -hht, hht, nearp, farp);
    
-   printf("window size : %dx%d\n", state->screen_width, state->screen_height);
+    printf("window size : %dx%d\n", state->screen_width, state->screen_height);
    
-   glEnableClientState( GL_VERTEX_ARRAY );
-   glScalef(1.,1.,0.);
-   glVertexPointer( 3, GL_BYTE, 0, quadx );
+    glEnableClientState( GL_VERTEX_ARRAY );
+    glScalef(1.,1.,0.);
+    glVertexPointer( 3, GL_BYTE, 0, quadx );
 
-   reset_model(state);
+    reset_model(state);
 }
 
 /***********************************************************
@@ -294,13 +307,13 @@ static void update_model(CUBE_STATE_T *state)
  ***********************************************************/
 static void redraw_scene(CUBE_STATE_T *state)
 {
-   // Start with a clear screen
-   glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
+    // Start with a clear screen
+    glClear( GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT );
 
-   // draw first 4 vertices
-   glDrawArrays( GL_TRIANGLE_STRIP, 0, 4);
+    // draw first 4 vertices
+    glDrawArrays( GL_TRIANGLE_STRIP, 0, 4);
 
-   eglSwapBuffers(state->display, state->surface);
+    eglSwapBuffers(state->display, state->surface);
 }
 
 /***********************************************************
@@ -317,44 +330,41 @@ static void redraw_scene(CUBE_STATE_T *state)
  ***********************************************************/
 static void init_textures(CUBE_STATE_T *state)
 {
-   //// load three texture buffers but use them on six OGL|ES texture surfaces
-   glGenTextures(1, &state->tex);
+    //// load three texture buffers but use them on six OGL|ES texture surfaces
+    glGenTextures(1, &state->tex);
 
-   glBindTexture(GL_TEXTURE_2D, state->tex);
-   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, IMAGE_SIZE_WIDTH, IMAGE_SIZE_HEIGHT, 0,
-                GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glBindTexture(GL_TEXTURE_2D, state->tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, IMAGE_SIZE_WIDTH, IMAGE_SIZE_HEIGHT, 0,
+                GL_RGBA, GL_UNSIGNED_BYTE, NULL);  
 
-   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
 
-   /* Create EGL Image */
-   eglImage = eglCreateImageKHR(
+    /* Create EGL Image */
+    eglImage = eglCreateImageKHR(
                 state->display,
                 state->context,
                 EGL_GL_TEXTURE_2D_KHR,
                 (EGLClientBuffer)state->tex,
                 0);
     
-   if (eglImage == EGL_NO_IMAGE_KHR)
-   {
-      printf("eglCreateImageKHR failed.\n");
-      exit(1);
-   }
+    if (eglImage == EGL_NO_IMAGE_KHR)
+    {
+        printf("eglCreateImageKHR failed.\n");
+        exit(1);
+    }
 
-   // Start rendering
-   pthread_create(&thread1, NULL, video_decode_test, eglImage);
+    // setup overall texture environment
+    glTexCoordPointer(2, GL_FLOAT, 0, texCoords);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
 
-   // setup overall texture environment
-   glTexCoordPointer(2, GL_FLOAT, 0, texCoords);
-   glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glEnable(GL_TEXTURE_2D);
 
-   glEnable(GL_TEXTURE_2D);
-
-   // Bind texture surface to current vertices
-   glBindTexture(GL_TEXTURE_2D, state->tex);
+    // Bind texture surface to current vertices
+    glBindTexture(GL_TEXTURE_2D, state->tex);
 }
 
 /***********************************************************
@@ -375,6 +385,9 @@ static void init_osc(){
     /* add a function to wait for /quad message */
     lo_server_thread_add_method(osc_server, "/dst_point", "ffffffff", osc_handler_dst_point, NULL);
     lo_server_thread_add_method(osc_server, "/map_matrix", "fffffffff", osc_handler_matrix, NULL);
+    lo_server_thread_add_method(osc_server, "/open", "s", osc_handler_open, NULL);
+    lo_server_thread_add_method(osc_server, "/stop", "", osc_handler_stop, NULL);
+    lo_server_thread_add_method(osc_server, "/speed", "f", osc_handler_speed, NULL);
     
     lo_server_thread_start(osc_server);
 
@@ -400,7 +413,7 @@ void lo_error(int num, const char *msg, const char *path)
 }
 
 /***********************************************************
- * Name: quad_handler
+ * Name: osc_handler_*
  *
  * Arguments:
  *       refer to liblo documentation
@@ -553,12 +566,78 @@ int osc_handler_matrix(const char *path, const char *types, lo_arg **argv, int a
     return 0;
 }
 
-int osc_handler_camtranslate(const char *path, const char *types, lo_arg **argv, int argc,
+int osc_handler_open(const char *path, const char *types, lo_arg **argv, int argc,
 		 void *data, void *user_data){
-    state->distance=argv[0]->f;
+    printf("arg[0]->s : %s\n", &argv[0]->s);
+    strcpy(filename,&argv[0]->s);
+    printf("receive new file to open : %s\n",filename);
+    decoding_thread_stop();
+    decoding_thread_start();
+    return 0;
+}
+
+int osc_handler_stop(const char *path, const char *types, lo_arg **argv, int argc,
+		 void *data, void *user_data){
+    decoding_thread_stop();
+    return 0;
+}
+
+int osc_handler_speed(const char *path, const char *types, lo_arg **argv, int argc,
+		 void *data, void *user_data){
+             printf("receive /speed %f\n",argv[0]->f);
+    decoding_thread_setSpeed(argv[0]->f);
     return 0;
 }
 //------------------------------------------------------------------------------
+
+/***********************************************************
+ * Name: decoding_thread_stop
+ *
+ * Arguments:
+ *       none
+ *
+ * Description:   stop decoding thread
+ *
+ * Returns: void
+ *
+ ***********************************************************/
+ 
+static void decoding_thread_stop(void){
+    if (thread1){
+        printf("try to stop thread\n");
+        stop_flag=1;
+        pthread_join(thread1,NULL);
+        pthread_detach(thread1);
+        thread1=0;
+        stop_flag=0;
+    } else {
+        printf("no decoding thread to stop\n");
+    }
+    return;
+}
+
+/***********************************************************
+ * Name: decoding_thread_start
+ *
+ * Arguments:
+ *       none
+ *
+ * Description:   start decoding thread
+ *
+ * Returns: void
+ *
+ ***********************************************************/
+ 
+static void decoding_thread_start(void){
+    if (!thread1){
+        printf("start decoding thread\n");
+        stop_flag=0;
+        pthread_create(&thread1, NULL, video_decode_test, eglImage);
+    } else {
+        printf("decoding thread already started\n");
+    }
+    return;
+}
 
 static void exit_func(void)
 // Function to be passed to atexit().
@@ -582,36 +661,44 @@ static void exit_func(void)
    printf("\ncube closed\n");
 } // exit_func()
 
-
-
 //==============================================================================
 
 int main ()
 {
-   bcm_host_init();
-   printf("Note: ensure you have sufficient gpu_mem configured\n");
-
-   // Clear application state
-   memset( state, 0, sizeof( *state ) );
-      
-   // Start OGLES
-   init_ogl(state);
-
-   // Setup the model world
-   init_model_proj(state);
-
-   // initialise the OGLES texture(s)
-   init_textures(state);
+    filename=malloc(1024*sizeof(char));
+    filename[0]='\0';
    
-   // initialize OSC server
-   init_osc();
+    strcpy(filename, "/opt/vc/src/hello_pi/hello_video/test.h264");
+    
+    bcm_host_init();
+    printf("Note: ensure you have sufficient gpu_mem configured\n");
 
-   while (!terminate)
-   {
-      update_model(state);
-      redraw_scene(state);
-   }
-   exit_func();
-   return 0;
+    // Clear application state
+    memset( state, 0, sizeof( *state ) );
+      
+    // Start OGLES
+    init_ogl(state);
+
+    // Setup the model world
+    init_model_proj(state);
+
+    // initialise the OGLES texture(s)
+    init_textures(state);
+   
+    // initialize OSC server
+    init_osc();
+   
+    // start deconding thread
+    //~ decoding_thread_start();
+    
+    while (!terminate)
+    {
+        if ( thread1 ){
+            update_model(state);
+            redraw_scene(state);
+        }
+    }
+    exit_func();
+    return 0;
 }
 

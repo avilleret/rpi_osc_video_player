@@ -26,5 +26,5 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 #pragma once
 
-
 void* video_decode_test(void* arg);
+int decoding_thread_setSpeed(float speed);

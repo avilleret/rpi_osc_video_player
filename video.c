@@ -31,29 +31,87 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
 #include "bcm_host.h"
 #include "ilclient.h"
 
+#define OMX_INIT_STRUCTURE(a) \
+  memset(&(a), 0, sizeof(a)); \
+  (a).nSize = sizeof(a); \
+  (a).nVersion.s.nVersionMajor = OMX_VERSION_MAJOR; \
+  (a).nVersion.s.nVersionMinor = OMX_VERSION_MINOR; \
+  (a).nVersion.s.nRevision = OMX_VERSION_REVISION; \
+  (a).nVersion.s.nStep = OMX_VERSION_STEP
+  
+
 static OMX_BUFFERHEADERTYPE* eglBuffer = NULL;
 static COMPONENT_T* video_render = NULL;
+OMX_VIDEO_PARAM_PORTFORMATTYPE format;
+OMX_TIME_CONFIG_CLOCKSTATETYPE cstate;
+OMX_TIME_CONFIG_ACTIVEREFCLOCKTYPE cref;
+COMPONENT_T *video_decode = NULL, *video_scheduler = NULL, *omx_clock = NULL;
+COMPONENT_T *list[5];
+TUNNEL_T tunnel[4];
+ILCLIENT_T *client;
+FILE *in;
+
+pthread_mutex_t   m_lock;
+   
 
 static void* eglImage = 0;
+int stop_flag;
+char* filename;
 
 void my_fill_buffer_done(void* data, COMPONENT_T* comp)
 {
   if (OMX_FillThisBuffer(ilclient_get_handle(video_render), eglBuffer) != OMX_ErrorNone)
    {
       printf("OMX_FillThisBuffer failed in callback\n");
-      exit(1);
+      //~ exit(1);
    }
+}
+
+int decoding_thread_setSpeed(float speed){
+    
+    printf("try to lock thread\n");
+    
+    if(ILC_GET_HANDLE(omx_clock) == NULL) return -1;
+    
+    pthread_mutex_lock(&m_lock);
+
+    OMX_ERRORTYPE omx_err = OMX_ErrorNone;
+    OMX_TIME_CONFIG_SCALETYPE scaleType;
+    OMX_INIT_STRUCTURE(scaleType);
+    
+    scaleType.xScale = floor((speed * pow(2,16)));
+    
+    printf("set speed to : %.2f, %d\n", speed, scaleType.xScale);
+    
+    omx_err = OMX_SetParameter(ILC_GET_HANDLE(omx_clock), OMX_IndexConfigTimeScale, &scaleType);
+    if(omx_err != OMX_ErrorNone)
+    {
+        printf("Speed error setting OMX_IndexConfigTimeClockState : %d\n", omx_err);
+        pthread_mutex_unlock(&m_lock);
+        return -1;
+    }
+    
+    printf("unlock thread\n");   
+    
+    pthread_mutex_unlock(&m_lock);
+    return 0;
+    
 }
 
 
 // Modified function prototype to work with pthreads
 void *video_decode_test(void* arg)
 {
-   const char* filename = "/opt/vc/src/hello_pi/hello_video/test.h264";
+    pthread_mutex_init(&m_lock, NULL);
+    printf("OMX version : %d.%d.%d-%d\n",OMX_VERSION_MAJOR, OMX_VERSION_MINOR, OMX_VERSION_REVISION, OMX_VERSION_STEP);
+
+   printf("file to read : %s\n", filename);
+   
    eglImage = arg;
 
    if (eglImage == 0)
@@ -62,13 +120,6 @@ void *video_decode_test(void* arg)
       exit(1);
    }
 
-   OMX_VIDEO_PARAM_PORTFORMATTYPE format;
-   OMX_TIME_CONFIG_CLOCKSTATETYPE cstate;
-   COMPONENT_T *video_decode = NULL, *video_scheduler = NULL, *clock = NULL;
-   COMPONENT_T *list[5];
-   TUNNEL_T tunnel[4];
-   ILCLIENT_T *client;
-   FILE *in;
    int status = 0;
    unsigned int data_len = 0;
    int packet_size = 80<<10;
@@ -107,17 +158,29 @@ void *video_decode_test(void* arg)
    list[1] = video_render;
 
    // create clock
-   if(status == 0 && ilclient_create_component(client, &clock, "clock", ILCLIENT_DISABLE_ALL_PORTS) != 0)
+   if(status == 0 && ilclient_create_component(client, &omx_clock, "clock", ILCLIENT_DISABLE_ALL_PORTS) != 0)
       status = -14;
-   list[2] = clock;
+   list[2] = omx_clock;
 
-   memset(&cstate, 0, sizeof(cstate));
-   cstate.nSize = sizeof(cstate);
-   cstate.nVersion.nVersion = OMX_VERSION;
-   cstate.eState = OMX_TIME_ClockStateWaitingForStartTime;
-   cstate.nWaitMask = 1;
-   if(clock != NULL && OMX_SetParameter(ILC_GET_HANDLE(clock), OMX_IndexConfigTimeClockState, &cstate) != OMX_ErrorNone)
+    memset(&cstate, 0, sizeof(cstate));
+    cstate.nSize = sizeof(cstate);
+    cstate.nVersion.nVersion = OMX_VERSION;
+    cstate.eState = OMX_TIME_ClockStateWaitingForStartTime;
+    cstate.nWaitMask = 1;
+    if(omx_clock != NULL && OMX_SetParameter(ILC_GET_HANDLE(omx_clock), OMX_IndexConfigTimeClockState, &cstate) != OMX_ErrorNone)
       status = -13;
+      
+    // set the clock refenrece to "none"
+    memset(&cref,0,sizeof(cref));
+    cref.nSize = sizeof(cref);
+    cref.nVersion.nVersion = OMX_VERSION;
+    cref.eClock = OMX_TIME_RefClockNone;
+
+    if(omx_clock != NULL && OMX_SetParameter(ILC_GET_HANDLE(omx_clock), OMX_IndexConfigTimeActiveRefClock, &cref) != OMX_ErrorNone){
+      status = -13;
+      printf("error setting refclock\n");
+  }
+    
 
    // create video_scheduler
    if(status == 0 && ilclient_create_component(client, &video_scheduler, "video_scheduler", ILCLIENT_DISABLE_ALL_PORTS) != 0)
@@ -127,13 +190,13 @@ void *video_decode_test(void* arg)
    set_tunnel(tunnel, video_decode, 131, video_scheduler, 10);
    //set_tunnel(tunnel+1, video_scheduler, 11, video_render, 90);
    set_tunnel(tunnel+1, video_scheduler, 11, video_render, 220);
-   set_tunnel(tunnel+2, clock, 80, video_scheduler, 12);
+   set_tunnel(tunnel+2, omx_clock, 80, video_scheduler, 12);
 
    // setup clock tunnel first
    if(status == 0 && ilclient_setup_tunnel(tunnel+2, 0, 0) != 0)
       status = -15;
    else
-      ilclient_change_component_state(clock, OMX_StateExecuting);
+      ilclient_change_component_state(omx_clock, OMX_StateExecuting);
 
    if(status == 0)
       ilclient_change_component_state(video_decode, OMX_StateIdle);
@@ -154,11 +217,11 @@ void *video_decode_test(void* arg)
 
       ilclient_change_component_state(video_decode, OMX_StateExecuting);
 
-      while((buf = ilclient_get_input_buffer(video_decode, 130, 1)) != NULL)
+      while((buf = ilclient_get_input_buffer(video_decode, 130, 1)) != NULL && stop_flag==0 )
       {
          // feed data and wait until we get port settings changed
          unsigned char *dest = buf->pBuffer;
-
+         
          // loop if at end
          if (feof(in))
             rewind(in);
@@ -212,7 +275,7 @@ void *video_decode_test(void* arg)
             if(OMX_FillThisBuffer(ILC_GET_HANDLE(video_render), eglBuffer) != OMX_ErrorNone)
             {
                printf("OMX_FillThisBuffer failed.\n");
-               exit(1);
+               //~ exit(1);
             }
          }
          if(!data_len)
@@ -236,6 +299,31 @@ void *video_decode_test(void* arg)
             break;
          }
       }
+      printf("loop ends, now flush the buffer\n");
+      
+        OMX_SendCommand(ILC_GET_HANDLE(video_decode),OMX_CommandFlush,130,NULL);
+        OMX_SendCommand(ILC_GET_HANDLE(video_decode),OMX_CommandFlush,131,NULL);
+      
+        ilclient_wait_for_event(video_decode, OMX_EventCmdComplete, OMX_CommandFlush, 0, 130, 0, ILCLIENT_PORT_FLUSH, -1);
+        ilclient_wait_for_event(video_decode, OMX_EventCmdComplete, OMX_CommandFlush, 0, 131, 0, ILCLIENT_PORT_FLUSH, -1);
+        
+        data_len=0;        
+           
+        memset(&cstate, 0, sizeof(cstate));
+        cstate.nSize = sizeof(cstate);
+        cstate.nVersion.nVersion = OMX_VERSION;
+        cstate.eState = OMX_TIME_ClockStateStopped;
+        cstate.nWaitMask = 1;
+        OMX_SetParameter(ILC_GET_HANDLE(omx_clock), OMX_IndexConfigTimeClockState, &cstate);
+                  
+        memset(&cstate, 0, sizeof(cstate));
+        cstate.nSize = sizeof(cstate);
+        cstate.nVersion.nVersion = OMX_VERSION;
+        cstate.eState = OMX_TIME_ClockStateWaitingForStartTime;
+        cstate.nWaitMask = 1;
+        OMX_SetParameter(ILC_GET_HANDLE(omx_clock), OMX_IndexConfigTimeClockState, &cstate);
+        
+        //~ scheduler should be stopped...
 
       buf->nFilledLen = 0;
       buf->nFlags = OMX_BUFFERFLAG_TIME_UNKNOWN | OMX_BUFFERFLAG_EOS;
@@ -244,15 +332,19 @@ void *video_decode_test(void* arg)
          status = -20;
 
       // wait for EOS from render
-      ilclient_wait_for_event(video_render, OMX_EventBufferFlag, 90, 0, OMX_BUFFERFLAG_EOS, 0,
-                              ILCLIENT_BUFFER_FLAG_EOS, 10000);
+      //~ printf("wait for EOS from render\n");
+      //~ ilclient_wait_for_event(video_render, OMX_EventBufferFlag, 90, 0, OMX_BUFFERFLAG_EOS, 0,
+                              //~ ILCLIENT_BUFFER_FLAG_EOS, 10000);
+        while ((ilclient_remove_event(video_render, OMX_EventBufferFlag, 90, 0, OMX_BUFFERFLAG_EOS, 0) <0 ) && !stop_flag){
+       }
 
+        printf("flush the render\n");
       // need to flush the renderer to allow video_decode to disable its input port
       ilclient_flush_tunnels(tunnel, 0);
 
       ilclient_disable_port_buffers(video_decode, 130, NULL, NULL, NULL);
    }
-
+    printf("close file\n");
    fclose(in);
 
    ilclient_disable_tunnel(tunnel);
@@ -268,6 +360,9 @@ void *video_decode_test(void* arg)
    OMX_Deinit();
 
    ilclient_destroy(client);
+   printf("thread will return...\n");
+   
+   pthread_mutex_destroy(&m_lock);
    return (void *)status;
 }
 
