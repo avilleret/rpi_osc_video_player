@@ -1,4 +1,5 @@
-#N canvas 330 159 993 581 10;
+#N canvas 674 454 993 581 10;
+#X declare -path bin;
 #X obj 201 410 packOSC;
 #X obj 201 542 udpsend;
 #X msg 221 433 connect 127.0.0.1 7770;
@@ -159,6 +160,16 @@
 #X coords 0 -1 1 1 250 120 2 100 100;
 #X restore 474 179 pd map_matrix;
 #X text 489 158 directly set perspective transformation matrix;
+#X obj 325 47 declare -path bin;
+#X msg 447 364 /stop;
+#X msg 528 382 sendtyped /open s /home/pi/rpi_osc_video_player/output-h264.mkv
+;
+#X msg 528 420 sendtyped /open s /home/pi/rpi_osc_video_player/output.h264
+;
+#X msg 528 440 sendtyped /open s /opt/vc/src/hello_pi/hello_video/test.h264
+;
+#X msg 536 356 /speed \$1;
+#X floatatom 536 338 5 0 0 0 - - -;
 #X connect 0 0 9 0;
 #X connect 0 0 10 0;
 #X connect 1 0 10 1;
@@ -175,3 +186,9 @@
 #X connect 11 0 0 0;
 #X connect 12 0 4 0;
 #X connect 14 0 11 0;
+#X connect 17 0 0 0;
+#X connect 18 0 0 0;
+#X connect 19 0 0 0;
+#X connect 20 0 0 0;
+#X connect 21 0 0 0;
+#X connect 22 0 21 0;
