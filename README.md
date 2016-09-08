@@ -3,7 +3,7 @@ rpi_osc_video_player
 Video player for Raspberry Pi with perspective correction and OSC control
 Antoine Villeret - 2013
 
-Dependencies : `liblo`, `opencv` and `ilclient` to get the first two, just run : 
+Dependencies : `liblo`, `opencv` and `ilclient` to get the first two, just run :
 
 `$ sudo apt-get install liblo-dev libopencv-dev`
 
@@ -18,7 +18,10 @@ vgfont is not used yet, so it's optional...
 
 to build `rpi_osc_video_player.bin`, just run (in the folder download from git) :
 
-`$ make`
+~~~~
+$ make clean
+$ make
+~~~~
 
 to use :
 
